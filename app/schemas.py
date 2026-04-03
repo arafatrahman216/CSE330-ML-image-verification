@@ -39,3 +39,24 @@ class DeletePointResponse(BaseModel):
     point_id: str
     deleted_from_qdrant: bool
     deleted_from_storage: bool
+
+
+class VoiceEnrollResponse(BaseModel):
+    point_id: str
+    user_id: str
+    name: str
+    audio_url: str
+    collection: str
+
+
+class VoiceMatchItem(BaseModel):
+    point_id: str
+    score: float
+    user_id: str | None = None
+    name: str | None = None
+    audio_url: str | None = None
+
+
+class VoiceSearchResponse(BaseModel):
+    top_k: int
+    matches: list[VoiceMatchItem] = Field(default_factory=list)

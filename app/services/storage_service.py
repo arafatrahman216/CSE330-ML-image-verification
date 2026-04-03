@@ -30,8 +30,23 @@ class StorageService:
         )
         return key, f"{self._public_prefix}/{key}"
 
+    def upload_audio(self, audio_bytes: bytes, user_id: str, extension: str, mime_type: str) -> tuple[str, str]:
+        key = f"voices/{user_id}/{uuid.uuid4().hex}.{extension}"
+        self._client.put_object(
+            Bucket=self._bucket,
+            Key=key,
+            Body=audio_bytes,
+            ContentType=mime_type,
+        )
+        return key, f"{self._public_prefix}/{key}"
+
     def delete_image_by_url(self, image_url: str) -> bool:
         key = self._extract_key(image_url)
+        self._client.delete_object(Bucket=self._bucket, Key=key)
+        return True
+
+    def delete_file_by_url(self, file_url: str) -> bool:
+        key = self._extract_key(file_url)
         self._client.delete_object(Bucket=self._bucket, Key=key)
         return True
 
