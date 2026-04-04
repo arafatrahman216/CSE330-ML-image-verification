@@ -9,8 +9,11 @@ from app.schemas import (
     MatchItem,
     PointResponse,
     SearchResponse,
+    VoiceEnrollResponse,
+    VoiceMatchItem,
+    VoiceSearchResponse,
 )
-from app.utils.validators import validate_image_upload
+from app.utils.validators import validate_audio_upload, validate_image_upload
 
 router = APIRouter()
 
@@ -167,6 +170,145 @@ async def search(
     matches.sort(key=lambda item: item.score, reverse=True)
 
     return SearchResponse(top_k=settings.fixed_top_k, matches=matches)
+
+
+@router.post("/voice/enroll", response_model=VoiceEnrollResponse)
+async def enroll_voice(
+    request: Request,
+    name: str = Form(...),
+    user_id: str | None = Form(default=None),
+    audio: UploadFile = File(...),
+) -> VoiceEnrollResponse:
+    settings = request.app.state.settings
+    qdrant_service = request.app.state.voice_qdrant_service
+    storage_service = request.app.state.storage_service
+    embedding_service = request.app.state.voice_embedding_service
+
+    audio_bytes = await audio.read()
+    extension = validate_audio_upload(
+        audio,
+        audio_bytes,
+        allowed_types=settings.allowed_audio_type_set,
+        max_size_bytes=settings.max_audio_size_bytes,
+    )
+
+    resolved_user_id = user_id or str(uuid4())
+    point_id = str(uuid4())
+    content_type = audio.content_type or "application/octet-stream"
+
+    uploaded_key: str | None = None
+    audio_url: str | None = None
+
+    try:
+        embedding = embedding_service.get_embedding(audio_bytes, extension)
+        uploaded_key, audio_url = storage_service.upload_audio(
+            audio_bytes=audio_bytes,
+            user_id=resolved_user_id,
+            extension=extension,
+            mime_type=content_type,
+        )
+
+        qdrant_service.upsert_point(
+            point_id=point_id,
+            vector=embedding,
+            payload={
+                "user_id": resolved_user_id,
+                "name": name,
+                "audio_url": audio_url,
+            },
+        )
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        if uploaded_key:
+            storage_service.delete_image_by_key(uploaded_key)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except TimeoutError as exc:
+        if uploaded_key:
+            storage_service.delete_image_by_key(uploaded_key)
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail=f"Voice enroll failed: {exc}",
+        ) from exc
+    except Exception as exc:
+        if uploaded_key:
+            storage_service.delete_image_by_key(uploaded_key)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Voice enroll failed: {exc}",
+        ) from exc
+
+    return VoiceEnrollResponse(
+        point_id=point_id,
+        user_id=resolved_user_id,
+        name=name,
+        audio_url=audio_url,
+        collection=settings.voice_qdrant_collection_name,
+    )
+
+
+@router.post("/voice/search", response_model=VoiceSearchResponse)
+async def search_voice(
+    request: Request,
+    audio: UploadFile = File(...),
+    top_k: int | None = Form(default=None),
+) -> VoiceSearchResponse:
+    settings = request.app.state.settings
+    qdrant_service = request.app.state.voice_qdrant_service
+    embedding_service = request.app.state.voice_embedding_service
+
+    if top_k is not None and top_k != settings.fixed_top_k:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"top_k is fixed to {settings.fixed_top_k}",
+        )
+
+    audio_bytes = await audio.read()
+    extension = validate_audio_upload(
+        audio,
+        audio_bytes,
+        allowed_types=settings.allowed_audio_type_set,
+        max_size_bytes=settings.max_audio_size_bytes,
+    )
+
+    try:
+        query_embedding = embedding_service.get_embedding(audio_bytes, extension)
+        points = qdrant_service.search_points(
+            query_embedding,
+            limit=settings.fixed_top_k,
+            min_score=settings.min_voice_match_score,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except TimeoutError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail=f"Voice search failed: {exc}",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Voice search failed: {exc}",
+        ) from exc
+
+    matches = []
+    for point in points:
+        score = float(point.score)
+
+        payload = point.payload or {}
+        matches.append(
+            VoiceMatchItem(
+                point_id=str(point.id),
+                score=score,
+                user_id=payload.get("user_id"),
+                name=payload.get("name"),
+                audio_url=payload.get("audio_url"),
+            )
+        )
+
+    matches.sort(key=lambda item: item.score, reverse=True)
+
+    return VoiceSearchResponse(top_k=settings.fixed_top_k, matches=matches)
 
 
 @router.get("/point/{point_id}", response_model=PointResponse)

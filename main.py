@@ -8,6 +8,8 @@ from app.routes import router
 from app.services.embedding_service import EmbeddingService
 from app.services.qdrant_service import QdrantService
 from app.services.storage_service import StorageService
+from app.services.voice_embedding_service import VoiceEmbeddingService
+from app.services.voice_qdrant_service import VoiceQdrantService
 
 
 @asynccontextmanager
@@ -17,13 +19,19 @@ async def lifespan(app: FastAPI):
     qdrant_service = QdrantService(settings)
     qdrant_service.ensure_collection_exists()
 
+    voice_qdrant_service = VoiceQdrantService(settings)
+    voice_qdrant_service.ensure_collection_exists()
+
     storage_service = StorageService(settings)
     embedding_service = EmbeddingService(settings)
+    voice_embedding_service = VoiceEmbeddingService(settings)
 
     app.state.settings = settings
     app.state.qdrant_service = qdrant_service
     app.state.storage_service = storage_service
     app.state.embedding_service = embedding_service
+    app.state.voice_qdrant_service = voice_qdrant_service
+    app.state.voice_embedding_service = voice_embedding_service
 
     yield
 
