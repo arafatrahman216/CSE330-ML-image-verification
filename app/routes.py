@@ -5,6 +5,8 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, s
 from app.schemas import (
     DeletePointResponse,
     EnrollResponse,
+    FaceVoiceCandidate,
+    FaceVoiceSearchResponse,
     HealthResponse,
     MatchItem,
     PointResponse,
@@ -308,7 +310,139 @@ async def search_voice(
 
     matches.sort(key=lambda item: item.score, reverse=True)
 
-    return VoiceSearchResponse(top_k=settings.fixed_top_k, matches=matches)
+    matched = len(matches) > 0
+
+    return VoiceSearchResponse(
+        top_k=settings.fixed_top_k,
+        matched=matched,
+        status="matched" if matched else "unmatched",
+        matches=matches,
+    )
+
+
+@router.post("/face-voice/search", response_model=FaceVoiceSearchResponse)
+async def search_face_voice(
+    request: Request,
+    image: UploadFile = File(...),
+    audio: UploadFile = File(...),
+    top_k: int | None = Form(default=None),
+) -> FaceVoiceSearchResponse:
+    settings = request.app.state.settings
+    face_qdrant_service = request.app.state.qdrant_service
+    voice_qdrant_service = request.app.state.voice_qdrant_service
+    face_embedding_service = request.app.state.embedding_service
+    voice_embedding_service = request.app.state.voice_embedding_service
+
+    if top_k is not None and top_k != settings.fixed_top_k:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"top_k is fixed to {settings.fixed_top_k}",
+        )
+
+    image_bytes = await image.read()
+    image_extension = validate_image_upload(
+        image,
+        image_bytes,
+        allowed_types=settings.allowed_image_type_set,
+        max_size_bytes=settings.max_image_size_bytes,
+    )
+
+    audio_bytes = await audio.read()
+    audio_extension = validate_audio_upload(
+        audio,
+        audio_bytes,
+        allowed_types=settings.allowed_audio_type_set,
+        max_size_bytes=settings.max_audio_size_bytes,
+    )
+
+    try:
+        face_query_embedding = face_embedding_service.get_embedding(image_bytes, image_extension)
+        voice_query_embedding = voice_embedding_service.get_embedding(audio_bytes, audio_extension)
+
+        face_points = face_qdrant_service.search_points(
+            face_query_embedding,
+            limit=settings.fixed_top_k,
+            min_score=settings.min_match_score,
+        )
+        voice_points = voice_qdrant_service.search_points(
+            voice_query_embedding,
+            limit=settings.fixed_top_k,
+            min_score=settings.min_voice_match_score,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except TimeoutError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail=f"Face-voice search failed: {exc}",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Face-voice search failed: {exc}",
+        ) from exc
+
+    face_matches: list[MatchItem] = []
+    for point in face_points:
+        payload = point.payload or {}
+        face_matches.append(
+            MatchItem(
+                point_id=str(point.id),
+                score=float(point.score),
+                user_id=payload.get("user_id"),
+                name=payload.get("name"),
+                image_url=payload.get("image_url"),
+            )
+        )
+
+    voice_matches: list[VoiceMatchItem] = []
+    for point in voice_points:
+        payload = point.payload or {}
+        voice_matches.append(
+            VoiceMatchItem(
+                point_id=str(point.id),
+                score=float(point.score),
+                user_id=payload.get("user_id"),
+                name=payload.get("name"),
+                audio_url=payload.get("audio_url"),
+            )
+        )
+
+    face_matches.sort(key=lambda item: item.score, reverse=True)
+    voice_matches.sort(key=lambda item: item.score, reverse=True)
+
+    face_by_user = {item.user_id: item for item in face_matches if item.user_id}
+    voice_by_user = {item.user_id: item for item in voice_matches if item.user_id}
+
+    candidates: list[FaceVoiceCandidate] = []
+    for user_id, face_item in face_by_user.items():
+        voice_item = voice_by_user.get(user_id)
+        if voice_item is None:
+            continue
+
+        combined_score = (face_item.score + voice_item.score) / 2.0
+        candidates.append(
+            FaceVoiceCandidate(
+                user_id=user_id,
+                name=face_item.name or voice_item.name,
+                face_score=face_item.score,
+                voice_score=voice_item.score,
+                combined_score=combined_score,
+            )
+        )
+
+    candidates.sort(key=lambda item: item.combined_score, reverse=True)
+    matched = len(candidates) > 0
+
+    return FaceVoiceSearchResponse(
+        top_k=settings.fixed_top_k,
+        matched=matched,
+        status="matched" if matched else "unmatched",
+        best_match=candidates[0] if candidates else None,
+        candidates=candidates,
+        face_matches=face_matches,
+        voice_matches=voice_matches,
+    )
 
 
 @router.get("/point/{point_id}", response_model=PointResponse)

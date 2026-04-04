@@ -105,10 +105,13 @@ class VoiceEmbeddingService:
 
             # Fall through to gradio client path as a fallback if HTTP API fails.
 
-        suffix = f".{file_extension}"
+        normalized_ext = file_extension.strip().lower().lstrip(".")
+        suffix = f".{normalized_ext}"
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(audio_bytes)
             temp_path = tmp.name
+
+        cleanup_paths: list[str] = [temp_path]
 
         result = None
         last_error: Exception | None = None
@@ -119,18 +122,10 @@ class VoiceEmbeddingService:
                     if self._client is None:
                         self._client = self._build_client(self._settings.voice_embedding_api_url)
 
-                    result = self._client.predict(
-                        **{
-                            self._settings.voice_embedding_api_input_name: handle_file(temp_path),
-                            "api_name": self._settings.voice_embedding_api_name,
-                        }
-                    )
+                    result = self._predict_with_api_names(temp_path)
                     break
                 except TypeError:
-                    result = self._client.predict(
-                        handle_file(temp_path),
-                        api_name=self._settings.voice_embedding_api_name,
-                    )
+                    result = self._predict_with_api_names(temp_path, positional_input=True)
                     break
                 except Exception as exc:
                     last_error = exc
@@ -138,8 +133,9 @@ class VoiceEmbeddingService:
                         break
                     time.sleep(base_delay * attempt)
         finally:
-            if os.path.exists(temp_path):
-                os.remove(temp_path)
+            for path in cleanup_paths:
+                if os.path.exists(path):
+                    os.remove(path)
 
         if result is None:
             if self._is_timeout_error(last_error):
@@ -149,6 +145,42 @@ class VoiceEmbeddingService:
             raise RuntimeError(f"Voice embedding API request failed: {last_error}") from last_error
 
         return result
+
+
+    def _predict_with_api_names(self, temp_path: str, positional_input: bool = False):
+        configured = (self._settings.voice_embedding_api_name or "").strip() or "/get_embedding"
+        if not configured.startswith("/"):
+            configured = f"/{configured}"
+
+        api_candidates = list(dict.fromkeys([configured, "/get_embedding"]))
+
+        input_candidates = [self._settings.voice_embedding_api_input_name]
+        if "audio_file" not in input_candidates:
+            input_candidates.append("audio_file")
+
+        last_error: Exception | None = None
+        for api_name in api_candidates:
+            if not positional_input:
+                for input_name in input_candidates:
+                    try:
+                        return self._client.predict(
+                            **{
+                                input_name: handle_file(temp_path),
+                                "api_name": api_name,
+                            }
+                        )
+                    except Exception as exc:
+                        last_error = exc
+
+            try:
+                return self._client.predict(
+                    handle_file(temp_path),
+                    api_name=api_name,
+                )
+            except Exception as exc:
+                last_error = exc
+
+        raise last_error or RuntimeError("Voice embedding API request failed")
 
     def _predict_http(self, audio_bytes: bytes, file_extension: str):
         if not self._http_embedding_url:
@@ -196,7 +228,18 @@ class VoiceEmbeddingService:
             except json.JSONDecodeError as exc:
                 raise ValueError("Voice embedding payload string is not valid JSON") from exc
 
+        # Gradio spaces often return tuples like: ({"embedding": [...]}, 256)
+        if isinstance(candidate, Sequence) and not isinstance(candidate, (str, bytes, bytearray)):
+            for item in candidate:
+                if isinstance(item, dict) and isinstance(item.get("error"), str):
+                    raise ValueError(f"Voice embedding API error: {item['error']}")
+                if isinstance(item, dict) and any(k in item for k in ("embedding", "vector", "data", "value")):
+                    candidate = item
+                    break
+
         if isinstance(candidate, dict):
+            if isinstance(candidate.get("error"), str):
+                raise ValueError(f"Voice embedding API error: {candidate['error']}")
             for key in ("embedding", "vector", "data", "value"):
                 if key in candidate:
                     candidate = candidate[key]

@@ -38,10 +38,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Face ID Backend", version="1.0.0", lifespan=lifespan)
 settings = get_settings()
+allow_all_origins = "*" in settings.cors_allowed_origin_list
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_allowed_origin_list,
-    allow_credentials=True,
+    allow_origins=["*"] if allow_all_origins else settings.cors_allowed_origin_list,
+    allow_credentials=False if allow_all_origins else True,
     allow_methods=["*"],
     allow_headers=["*"],
 )

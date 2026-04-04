@@ -59,4 +59,24 @@ class VoiceMatchItem(BaseModel):
 
 class VoiceSearchResponse(BaseModel):
     top_k: int
+    matched: bool
+    status: str
     matches: list[VoiceMatchItem] = Field(default_factory=list)
+
+
+class FaceVoiceCandidate(BaseModel):
+    user_id: str
+    name: str | None = None
+    face_score: float
+    voice_score: float
+    combined_score: float
+
+
+class FaceVoiceSearchResponse(BaseModel):
+    top_k: int
+    matched: bool
+    status: str
+    best_match: FaceVoiceCandidate | None = None
+    candidates: list[FaceVoiceCandidate] = Field(default_factory=list)
+    face_matches: list[MatchItem] = Field(default_factory=list)
+    voice_matches: list[VoiceMatchItem] = Field(default_factory=list)

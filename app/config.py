@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     app_port: int = 8000
     log_level: str = "INFO"
     cors_allowed_origins: str = Field(
-        "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173",
+        "*",
         alias="CORS_ALLOWED_ORIGINS",
     )
 
@@ -44,8 +44,8 @@ class Settings(BaseSettings):
         alias="VOICE_EMBEDDING_API_URL",
     )
     voice_embedding_api_key: str | None = Field(None, alias="VOICE_EMBEDDING_API_KEY")
-    voice_embedding_api_name: str = Field("/predict", alias="VOICE_EMBEDDING_API_NAME")
-    voice_embedding_api_input_name: str = Field("audio", alias="VOICE_EMBEDDING_API_INPUT_NAME")
+    voice_embedding_api_name: str = Field("/get_embedding", alias="VOICE_EMBEDDING_API_NAME")
+    voice_embedding_api_input_name: str = Field("audio_file", alias="VOICE_EMBEDDING_API_INPUT_NAME")
     voice_embedding_api_max_retries: int = Field(3, alias="VOICE_EMBEDDING_API_MAX_RETRIES")
     voice_embedding_api_retry_delay_seconds: float = Field(
         1.5,

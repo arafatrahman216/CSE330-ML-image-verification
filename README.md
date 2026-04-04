@@ -42,6 +42,14 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+On Windows PowerShell, use:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
 2. Copy and edit environment variables:
 
 ```bash
@@ -51,7 +59,19 @@ cp .env.example .env
 3. Start server:
 
 ```bash
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+On Windows PowerShell, you can also run:
+
+```powershell
+\.\run.ps1
+```
+
+If you prefer to call the virtual environment directly on Windows, this also works:
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 ## Endpoints
@@ -98,3 +118,4 @@ curl -X DELETE "http://127.0.0.1:8000/point/<point_id>"
 - `top_k` is fixed to `5` by design.
 - If `user_id` is omitted during enroll, a UUID is generated.
 - On delete, backend removes both Qdrant point and the linked Supabase object.
+- The voice embedding Space now exposes `api_name=/get_embedding` instead of `/predict`.
